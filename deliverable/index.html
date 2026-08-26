@@ -5,15 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Sticko</title>
 <style>
+  * { -webkit-tap-highlight-color: rgba(0,0,0,0); }
   html, body {
     margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
     background: #ffffff;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    -webkit-tap-highlight-color: transparent;
+    -webkit-tap-highlight-color: rgba(0,0,0,0);
   }
   #scene {
     position: absolute; inset: 0; display: block; cursor: pointer; touch-action: none;
-    -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: rgba(0,0,0,0); -webkit-touch-callout: none;
     -webkit-user-select: none; user-select: none;
   }
 
@@ -149,8 +150,9 @@
   var CAT_PLATFORM_BOTTOM = 0x0004;
   var CAT_FIGURE_WALK = 0x0008;
   var CAT_FIGURE_RAGDOLL = 0x0010;
-  var MASK_WALK = CAT_PLATFORM_TOP | CAT_PLATFORM_BOTTOM | CAT_FIGURE_RAGDOLL;
-  var MASK_AIRBORNE = CAT_PLATFORM_BOTTOM | CAT_FIGURE_WALK | CAT_FIGURE_RAGDOLL;
+  // Figures never collide with each other, in any state -- only with platforms.
+  var MASK_WALK = CAT_PLATFORM_TOP | CAT_PLATFORM_BOTTOM;
+  var MASK_AIRBORNE = CAT_PLATFORM_BOTTOM;
 
   var platformTop = null, platformBottom = null;
 
@@ -353,6 +355,21 @@
       if (this.state === "falling") {
         Body.applyForce(this.torso, this.torso.position, { x: 0, y: (settings.fallRate - 1) * 0.0012 * this.torso.mass * intensity });
       }
+      // One-way top platform: solid from above, passable from below (that's
+      // what "never collides with its underside" means). A figure clearly
+      // above it and no longer rising can catch on it -- covers a catapult
+      // that overshot well past the platform, not just one that arrives
+      // gently (a gentle arrival is already handled by checkLanding's
+      // proximity check below). The margin has to clear a standing figure's
+      // own height above platformY (~30-50px depending on size), or a
+      // figure that just started falling *from* the top platform (which
+      // begins right at that height, moving down) immediately re-catches
+      // on the very platform it's supposed to fall through -- 150px is
+      // comfortably past that, while still well short of a normal
+      // catapult's apex (measured ~3px past platformY, not hundreds).
+      if (this.torso.position.y < platformY("top") - 150 && this.torso.velocity.y >= 0) {
+        this.parts.forEach(function (p) { p.collisionFilter.mask |= CAT_PLATFORM_TOP; });
+      }
       this.checkLanding();
     }
   };
@@ -436,11 +453,24 @@
   };
 
   Figure.prototype.checkLanding = function () {
+    // A figure starts this trip already "near" and "slow" relative to the
+    // platform it just left (it hasn't moved yet) -- without this gate,
+    // that alone can satisfy the near+slow streak below and register as
+    // landed before it ever actually falls/flies anywhere.
+    if (!this.hasLeftDeparture) {
+      if (Math.abs(this.torso.position.y - this.departureY) > 60) { this.hasLeftDeparture = true; }
+      else { this.groundedFrames = 0; return; }
+    }
     var groundOffset = settings.thickness / 2 + this.dims.legLen + this.dims.torsoH / 2;
     var targetTopY = platformY("top") - groundOffset;
     var targetBotY = platformY("bottom") - groundOffset;
-    var nearTop = Math.abs(this.torso.position.y - targetTopY) < 45 * this.size;
-    var nearBot = Math.abs(this.torso.position.y - targetBotY) < 45 * this.size;
+    // A real ragdoll rarely lands with its legs perfectly straight, so its
+    // actual resting height (via real collision) is measurably below the
+    // idealized straight-leg targetY -- measured ~28px off on an otherwise
+    // ordinary fall, against the old 45*size (~25px) tolerance, so it never
+    // registered as landed at all despite resting there at v=0 indefinitely.
+    var nearTop = Math.abs(this.torso.position.y - targetTopY) < 80 * this.size;
+    var nearBot = Math.abs(this.torso.position.y - targetBotY) < 80 * this.size;
     var slow = Math.abs(this.torso.velocity.y) < 12;
     var lost = this.torso.position.y > targetBotY + 300 || this.torso.position.y < targetTopY - 300;
     var landedWhich = nearTop ? "top" : (nearBot ? "bottom" : null);
@@ -473,6 +503,8 @@
     if (this.state === "falling" || this.state === "flying") return;
     this.state = "falling";
     this.setAirborne(true);
+    this.hasLeftDeparture = false;
+    this.departureY = platformY("top");
     Body.setVelocity(this.torso, { x: this.torso.velocity.x + rand(-1, 1), y: 0.5 });
   };
 
@@ -480,6 +512,8 @@
     if (this.state === "falling" || this.state === "flying") return;
     this.state = "flying";
     this.setAirborne(true);
+    this.hasLeftDeparture = false;
+    this.departureY = platformY("bottom");
     var power = 22 * settings.catapultRate * Math.sqrt(settings.intensity);
     this.parts.forEach(function (p) {
       Body.setVelocity(p, { x: p.velocity.x + rand(-1.5, 1.5), y: -power + rand(-1, 1) });
