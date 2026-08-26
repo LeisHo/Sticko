@@ -9,8 +9,13 @@
     margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
     background: #ffffff;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
   }
-  #scene { position: absolute; inset: 0; display: block; cursor: pointer; touch-action: none; }
+  #scene {
+    position: absolute; inset: 0; display: block; cursor: pointer; touch-action: none;
+    -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+    -webkit-user-select: none; user-select: none;
+  }
 
   #panelToggle {
     position: fixed; top: 14px; right: 14px; z-index: 10;
@@ -586,7 +591,20 @@
     figures.forEach(function (f) { allBodies = allBodies.concat(f.parts); });
     var hits = Query.point(allBodies, { x: x, y: y });
     if (hits.length) return hits[0].figureRef;
-    return null;
+
+    // Touch-friendly fallback: a finger tap rarely lands exactly on a limb
+    // a few px wide, so if nothing was hit exactly, pick the figure whose
+    // nearest part is within a forgiving radius instead of requiring a
+    // pixel-perfect hit (mouse cursors don't need this; touch does).
+    var TOL = 26;
+    var best = null, bestD = TOL;
+    figures.forEach(function (f) {
+      f.parts.forEach(function (p) {
+        var d = dist(p.position.x, p.position.y, x, y);
+        if (d < bestD) { bestD = d; best = f; }
+      });
+    });
+    return best;
   }
 
   function triggerFlee(clicked) {
