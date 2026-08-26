@@ -50,12 +50,21 @@
   }
   .ctrl .hint { font-size: 10px; color: #7a869c; margin-top: 2px; }
   .group-sep { border: none; border-top: 1px solid rgba(255,255,255,0.1); margin: 14px 0; }
+
+  #copySettings {
+    width: 100%; margin-bottom: 14px; padding: 8px 10px; font-size: 12px;
+    background: rgba(106,169,255,0.15); color: #dfe6f0; border: 1px solid rgba(106,169,255,0.4);
+    border-radius: 6px; cursor: pointer;
+  }
+  #copySettings:hover { background: rgba(106,169,255,0.28); }
+  #copySettings.copied { background: rgba(79,157,105,0.3); border-color: rgba(79,157,105,0.6); }
 </style>
 </head>
 <body>
 <canvas id="scene"></canvas>
 <button id="panelToggle">Hide dev panel</button>
 <div id="devPanel">
+  <button id="copySettings">Copy settings</button>
   <h2>Platforms</h2>
   <div class="ctrl"><label>Top platform height <span class="val" id="v_topY"></span></label>
     <input type="range" id="topY" min="50" max="320" step="1"></div>
@@ -702,6 +711,40 @@
     var panel = document.getElementById("devPanel");
     panel.classList.toggle("hidden");
     this.textContent = panel.classList.contains("hidden") ? "Show dev panel" : "Hide dev panel";
+  });
+
+  document.getElementById("copySettings").addEventListener("click", function () {
+    var btn = this;
+    var json = JSON.stringify(settings, null, 2);
+    var settled = false;
+    var showCopied = function () {
+      if (settled) return;
+      settled = true;
+      var orig = btn.textContent;
+      btn.textContent = "Copied!";
+      btn.classList.add("copied");
+      setTimeout(function () { btn.textContent = orig; btn.classList.remove("copied"); }, 1200);
+    };
+    var fallbackCopy = function () {
+      if (settled) return;
+      var ta = document.createElement("textarea");
+      ta.value = json;
+      ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      try { document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(ta);
+      showCopied();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(json).then(showCopied, fallbackCopy);
+      // The Clipboard API promise can hang indefinitely instead of
+      // rejecting (observed in at least one automated-browser context) --
+      // race it against a fallback so the button never gets stuck silent.
+      setTimeout(fallbackCopy, 600);
+    } else {
+      fallbackCopy();
+    }
   });
 
   // ---------- loop ----------
