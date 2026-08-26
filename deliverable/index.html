@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sticko</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+    background: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  #scene { position: absolute; inset: 0; display: block; cursor: pointer; }
+
+  #panelToggle {
+    position: fixed; top: 14px; right: 14px; z-index: 10;
+    background: rgba(20,24,34,0.85); color: #dfe6f0; border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer;
+    backdrop-filter: blur(4px);
+  }
+  #panelToggle:hover { background: rgba(35,42,58,0.9); }
+
+  #devPanel {
+    position: fixed; top: 58px; right: 14px; width: 260px; max-height: calc(100vh - 80px);
+    overflow-y: auto; z-index: 9;
+    background: rgba(18,22,32,0.88); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px; padding: 14px 16px 18px; backdrop-filter: blur(6px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    color: #dfe6f0;
+  }
+  #devPanel.hidden { display: none; }
+  #devPanel h2 {
+    margin: 0 0 10px; font-size: 14px; font-weight: 600; letter-spacing: 0.03em;
+    color: #9fb3d1; text-transform: uppercase;
+  }
+  .ctrl { margin-bottom: 12px; }
+  .ctrl label {
+    display: flex; justify-content: space-between; font-size: 12px; color: #c3ccdc;
+    margin-bottom: 4px;
+  }
+  .ctrl label span.val { color: #7fd0ff; font-variant-numeric: tabular-nums; }
+  .ctrl input[type=range] {
+    width: 100%; accent-color: #6aa9ff; cursor: pointer;
+  }
+  .ctrl .hint { font-size: 10px; color: #7a869c; margin-top: 2px; }
+  .group-sep { border: none; border-top: 1px solid rgba(255,255,255,0.1); margin: 14px 0; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<button id="panelToggle">Hide dev panel</button>
+<div id="devPanel">
+  <h2>Platforms</h2>
+  <div class="ctrl"><label>Top platform height <span class="val" id="v_topY"></span></label>
+    <input type="range" id="topY" min="50" max="320" step="1"></div>
+  <div class="ctrl"><label>Bottom platform height <span class="val" id="v_bottomY"></span></label>
+    <input type="range" id="bottomY" min="50" max="320" step="1"></div>
+  <div class="ctrl"><label>Platform thickness <span class="val" id="v_thickness"></span></label>
+    <input type="range" id="thickness" min="4" max="40" step="1"></div>
+
+  <hr class="group-sep">
+  <h2>Figures</h2>
+  <div class="ctrl"><label>Stickman size <span class="val" id="v_size"></span></label>
+    <input type="range" id="size" min="0.5" max="1" step="0.05">
+    <div class="hint">applies to newly-spawned figures</div></div>
+  <div class="ctrl"><label>Rate men enter frame <span class="val" id="v_spawnRate"></span></label>
+    <input type="range" id="spawnRate" min="0.4" max="3" step="0.1"></div>
+
+  <hr class="group-sep">
+  <h2>Physics</h2>
+  <div class="ctrl"><label>Rate of fall <span class="val" id="v_fallRate"></span></label>
+    <input type="range" id="fallRate" min="0.3" max="3" step="0.05"></div>
+  <div class="ctrl"><label>Rate of catapult <span class="val" id="v_catapultRate"></span></label>
+    <input type="range" id="catapultRate" min="0.4" max="3" step="0.05"></div>
+  <div class="ctrl"><label>Mid-air click effect <span class="val" id="v_punchScale"></span></label>
+    <input type="range" id="punchScale" min="0" max="3" step="0.05"></div>
+  <div class="ctrl"><label>Physics engine intensity <span class="val" id="v_intensity"></span></label>
+    <input type="range" id="intensity" min="0.3" max="2.5" step="0.05"></div>
+
+  <hr class="group-sep">
+  <h2>Shadows</h2>
+  <div class="ctrl"><label>Shadow size <span class="val" id="v_shadowSize"></span></label>
+    <input type="range" id="shadowSize" min="0" max="160" step="1"></div>
+  <div class="ctrl"><label>Shadow distance <span class="val" id="v_shadowDistance"></span></label>
+    <input type="range" id="shadowDistance" min="0" max="200" step="1"></div>
+  <div class="ctrl"><label>Shadow sharpness <span class="val" id="v_shadowSharpness"></span></label>
+    <input type="range" id="shadowSharpness" min="0" max="30" step="1"></div>
+
+  <hr class="group-sep">
+  <h2>Reactions</h2>
+  <div class="ctrl"><label>Reaction distance <span class="val" id="v_reactionDistance"></span></label>
+    <input type="range" id="reactionDistance" min="30" max="450" step="5"></div>
+  <div class="ctrl"><label>Run distance <span class="val" id="v_runDistance"></span></label>
+    <input type="range" id="runDistance" min="30" max="600" step="5"></div>
+  <div class="ctrl"><label>Randomization <span class="val" id="v_randomization"></span></label>
+    <input type="range" id="randomization" min="0" max="1" step="0.02"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var Engine = Matter.Engine, World = Matter.Composite, Bodies = Matter.Bodies,
+      Body = Matter.Body, Constraint = Matter.Constraint,
+      Query = Matter.Query, Vector = Matter.Vector;
+
+  // ---------- settings (bound to sliders) ----------
+  var settings = {
+    topY: 140, bottomY: 140, thickness: 12,
+    size: 0.55, spawnRate: 2.0,
+    fallRate: 1.0, catapultRate: 1.0, punchScale: 1.0, intensity: 1.0,
+    reactionDistance: 150, runDistance: 220, randomization: 0.3,
+    shadowSize: 20, shadowDistance: 10, shadowSharpness: 15
+  };
+
+  var canvas = document.getElementById("scene");
+  var ctx = canvas.getContext("2d");
+  var DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    canvas.width = window.innerWidth * DPR;
+    canvas.height = window.innerHeight * DPR;
+    canvas.style.width = window.innerWidth + "px";
+    canvas.style.height = window.innerHeight + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    rebuildPlatforms();
+  }
+  function W() { return window.innerWidth; }
+  function H() { return window.innerHeight; }
+
+  // ---------- physics world ----------
+  var engine = Engine.create();
+  engine.world.gravity.y = 1.0;
+  engine.constraintIterations = 8;
+  engine.positionIterations = 10;
+  engine.velocityIterations = 8;
+
+  // Two figure categories, not one: a "walking" figure only collides with
+  // platforms + anyone currently airborne (never another walker); an
+  // "airborne" (clicked/falling/flying) figure collides with everyone,
+  // including other airborne figures, but never the top platform (a
+  // stickman under the top platform must never hit its underside).
+  var CAT_PLATFORM_TOP = 0x0002;
+  var CAT_PLATFORM_BOTTOM = 0x0004;
+  var CAT_FIGURE_WALK = 0x0008;
+  var CAT_FIGURE_RAGDOLL = 0x0010;
+  var MASK_WALK = CAT_PLATFORM_TOP | CAT_PLATFORM_BOTTOM | CAT_FIGURE_RAGDOLL;
+  var MASK_AIRBORNE = CAT_PLATFORM_BOTTOM | CAT_FIGURE_WALK | CAT_FIGURE_RAGDOLL;
+
+  var platformTop = null, platformBottom = null;
+
+  function rebuildPlatforms() {
+    if (platformTop) World.remove(engine.world, platformTop);
+    if (platformBottom) World.remove(engine.world, platformBottom);
+    var topCy = settings.topY;
+    var botCy = H() - settings.bottomY;
+    platformTop = Bodies.rectangle(W() / 2, topCy, W() + 400, settings.thickness, {
+      isStatic: true, friction: 0.9, label: "platformTop",
+      collisionFilter: { category: CAT_PLATFORM_TOP, mask: CAT_FIGURE_WALK }
+    });
+    platformBottom = Bodies.rectangle(W() / 2, botCy, W() + 400, settings.thickness, {
+      isStatic: true, friction: 0.9, label: "platformBottom",
+      collisionFilter: { category: CAT_PLATFORM_BOTTOM, mask: CAT_FIGURE_WALK | CAT_FIGURE_RAGDOLL }
+    });
+    World.add(engine.world, [platformTop, platformBottom]);
+  }
+  function platformY(which) {
+    return which === "top" ? settings.topY : (H() - settings.bottomY);
+  }
+
+  // ---------- helpers ----------
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function normAngle(a) {
+    a = a % (Math.PI * 2);
+    if (a > Math.PI) a -= Math.PI * 2;
+    else if (a < -Math.PI) a += Math.PI * 2;
+    return a;
+  }
+  function settleAngle(body, angErr, decay, gain, maxAV) {
+    var av = body.angularVelocity * decay + angErr * gain;
+    if (av > maxAV) av = maxAV; else if (av < -maxAV) av = -maxAV;
+    Body.setAngularVelocity(body, av);
+  }
+  function localEndPoint(body, lx, ly) {
+    var c = Math.cos(body.angle), s = Math.sin(body.angle);
+    return { x: body.position.x + lx * c - ly * s, y: body.position.y + lx * s + ly * c };
+  }
+  function dist(ax, ay, bx, by) { var dx = ax - bx, dy = ay - by; return Math.sqrt(dx * dx + dy * dy); }
+  function jitter(base) { return base * (1 + (Math.random() * 2 - 1) * settings.randomization); }
+
+  // ---------- figure ----------
+  var figures = [];
+  var MAX_FIGURES = 40;
+
+  function Figure(x, y, homePlatform) {
+    var s = settings.size;
+    this.size = s;
+    this.homePlatform = homePlatform;
+    this.state = "walking";
+    this.phase = rand(0, Math.PI * 2);
+    this.idleTimer = rand(0.5, 2);
+    this.groundedFrames = 0;
+    this.getupTimer = 0;
+    this.hasArrived = true;
+
+    var torsoW = 15 * s * 0.75, torsoH = 44 * s * 0.75, headR = 11 * s;
+    var upperArmLen = 13 * s * 1.1, foreArmLen = 13 * s * 1.1, armLen = upperArmLen + foreArmLen;
+    var upperArmT = 7 * s, foreArmT = 6 * s;
+    var thighLen = 22 * s, shinLen = 19 * s, legLen = thighLen + shinLen;
+    var thighT = 8 * s, shinT = 7 * s;
+    this.dims = {
+      torsoW: torsoW, torsoH: torsoH, headR: headR,
+      upperArmLen: upperArmLen, foreArmLen: foreArmLen, armLen: armLen, upperArmT: upperArmT, foreArmT: foreArmT,
+      thighLen: thighLen, shinLen: shinLen, legLen: legLen, thighT: thighT, shinT: shinT
+    };
+
+    var grp = Body.nextGroup(false);
+    var opts = function (label) {
+      return {
+        label: label, friction: 0.6, frictionAir: 0.02, restitution: 0.1,
+        collisionFilter: { group: -grp, category: CAT_FIGURE_WALK, mask: MASK_WALK }
+      };
+    };
+
+    var torsoY = y - torsoH / 2 - legLen;
+    var headY = y - torsoH - legLen - headR;
+    var shoulderY = y - torsoH - legLen + 8 * s;
+    var thighCenterY = y - legLen + thighLen / 2;
+    var shinCenterY = y - shinLen / 2;
+
+    this.torso = Bodies.rectangle(x, torsoY, torsoW, torsoH, Object.assign({ density: 0.003 }, opts("torso")));
+    this.head = Bodies.circle(x, headY, headR, Object.assign({ density: 0.0015 }, opts("head")));
+    this.thighL = Bodies.rectangle(x - torsoW / 4, thighCenterY, thighT, thighLen, Object.assign({ density: 0.0018 }, opts("thighL")));
+    this.shinL = Bodies.rectangle(x - torsoW / 4, shinCenterY, shinT, shinLen, Object.assign({ density: 0.0016 }, opts("shinL")));
+    this.thighR = Bodies.rectangle(x + torsoW / 4, thighCenterY, thighT, thighLen, Object.assign({ density: 0.0018 }, opts("thighR")));
+    this.shinR = Bodies.rectangle(x + torsoW / 4, shinCenterY, shinT, shinLen, Object.assign({ density: 0.0016 }, opts("shinR")));
+    this.upperArmL = Bodies.rectangle(x - torsoW / 2 - upperArmLen / 2, shoulderY, upperArmLen, upperArmT, Object.assign({ density: 0.0012 }, opts("upperArmL")));
+    this.foreArmL = Bodies.rectangle(x - torsoW / 2 - upperArmLen - foreArmLen / 2, shoulderY, foreArmLen, foreArmT, Object.assign({ density: 0.001 }, opts("foreArmL")));
+    this.upperArmR = Bodies.rectangle(x + torsoW / 2 + upperArmLen / 2, shoulderY, upperArmLen, upperArmT, Object.assign({ density: 0.0012 }, opts("upperArmR")));
+    this.foreArmR = Bodies.rectangle(x + torsoW / 2 + upperArmLen + foreArmLen / 2, shoulderY, foreArmLen, foreArmT, Object.assign({ density: 0.001 }, opts("foreArmR")));
+    Body.setInertia(this.torso, this.torso.inertia * 8);
+    [this.head, this.upperArmL, this.foreArmL, this.upperArmR, this.foreArmR, this.thighL, this.shinL, this.thighR, this.shinR]
+      .forEach(function (p) { Body.setInertia(p, p.inertia * 4); });
+
+    this.parts = [this.torso, this.head, this.upperArmL, this.foreArmL, this.upperArmR, this.foreArmR, this.thighL, this.shinL, this.thighR, this.shinR];
+    this.parts.forEach(function (p) { p.figureRef = this; }.bind(this));
+
+    function joint(a, pa, b, pb, stiff) {
+      return Constraint.create({ bodyA: a, pointA: pa, bodyB: b, pointB: pb, stiffness: stiff, damping: 0.4, length: 0 });
+    }
+    this.joints = [
+      joint(this.torso, { x: 0, y: -torsoH / 2 }, this.head, { x: 0, y: headR * 0.7 }, 0.8),
+      joint(this.torso, { x: -torsoW / 2, y: -torsoH / 2 + 6 * s }, this.upperArmL, { x: upperArmLen / 2, y: 0 }, 0.55),
+      joint(this.torso, { x: torsoW / 2, y: -torsoH / 2 + 6 * s }, this.upperArmR, { x: -upperArmLen / 2, y: 0 }, 0.55),
+      joint(this.upperArmL, { x: -upperArmLen / 2, y: 0 }, this.foreArmL, { x: foreArmLen / 2, y: 0 }, 0.6),
+      joint(this.upperArmR, { x: upperArmLen / 2, y: 0 }, this.foreArmR, { x: -foreArmLen / 2, y: 0 }, 0.6),
+      joint(this.torso, { x: -torsoW / 4, y: torsoH / 2 }, this.thighL, { x: 0, y: -thighLen / 2 }, 0.7),
+      joint(this.torso, { x: torsoW / 4, y: torsoH / 2 }, this.thighR, { x: 0, y: -thighLen / 2 }, 0.7),
+      joint(this.thighL, { x: 0, y: thighLen / 2 }, this.shinL, { x: 0, y: -shinLen / 2 }, 0.65),
+      joint(this.thighR, { x: 0, y: thighLen / 2 }, this.shinR, { x: 0, y: -shinLen / 2 }, 0.65)
+    ];
+
+    World.add(engine.world, this.parts.concat(this.joints));
+
+    this.kinX = x;
+    this.walkTargetX = x;
+    this.speed = 1;
+  }
+
+  Figure.prototype.setAirborne = function (on) {
+    var cat = on ? CAT_FIGURE_RAGDOLL : CAT_FIGURE_WALK;
+    var mask = on ? MASK_AIRBORNE : MASK_WALK;
+    this.parts.forEach(function (p) {
+      p.collisionFilter.category = cat;
+      p.collisionFilter.mask = mask;
+    });
+  };
+
+  Figure.prototype.pickNewWander = function () {
+    var margin = 60;
+    this.walkTargetX = clamp(this.torso.position.x + rand(-260, 260), margin, W() - margin);
+  };
+
+
+  Figure.prototype.applyBehavior = function (dt) {
+    var intensity = settings.intensity;
+    var airborne = this.state === "falling" || this.state === "flying";
+
+    {
+      var maxV = airborne ? 45 : 16;
+      this.parts.forEach(function (p) {
+        var vx = clamp(p.velocity.x, -maxV, maxV);
+        var vy = clamp(p.velocity.y, -maxV, maxV);
+        if (vx !== p.velocity.x || vy !== p.velocity.y) Body.setVelocity(p, { x: vx, y: vy });
+      });
+    }
+
+    if (!airborne) {
+      var expectedY = platformY(this.homePlatform) - settings.thickness / 2 - this.dims.legLen - this.dims.torsoH / 2;
+      if (Math.abs(this.torso.position.y - expectedY) > 160) {
+        var recoverDy = expectedY - this.torso.position.y;
+        this.parts.forEach(function (p) {
+          Body.setPosition(p, { x: p.position.x, y: p.position.y + recoverDy });
+          Body.setVelocity(p, { x: p.velocity.x, y: 0 });
+        });
+      }
+    }
+
+    if (this.state === "walking" || this.state === "fleeing") {
+      var speedMul = this.state === "fleeing" ? 2.1 : 1;
+      var dx = this.walkTargetX - this.kinX;
+      var moving = Math.abs(dx) > 4;
+      if (moving) {
+        var dir = dx > 0 ? 1 : -1;
+        var step = dir * 96 * speedMul * dt;
+        if (Math.abs(step) > Math.abs(dx)) step = dx;
+        this.kinX += step;
+      }
+      this.phase += dt * (moving ? (2.6 + 3 * speedMul) : 1.1);
+      this.poseKinematic(moving, speedMul);
+
+      if (!moving) {
+        this.idleTimer = this.state === "fleeing" ? rand(0.6, 2.2) : rand(1, 3.5);
+        this.state = "idle";
+        this.hasArrived = true;
+      }
+    } else if (this.state === "idle") {
+      this.phase += dt * 0.9;
+      this.poseKinematic(false, 1);
+
+      this.idleTimer -= dt;
+      if (this.idleTimer <= 0) { this.pickNewWander(); this.state = "walking"; }
+    } else if (this.state === "gettingUp") {
+      // still a real physics ragdoll here -- just nudge it upright and let
+      // real collision settle it, same proven-stable combination as a bare
+      // resting figure (no limb forces fighting anything). Once upright and
+      // the timer clears, control hands off to the kinematic walk above.
+      var angErr = normAngle(0 - this.torso.angle);
+      settleAngle(this.torso, angErr, 0.8, 0.02, 0.12);
+      this.getupTimer -= dt;
+      if (this.getupTimer <= 0 && Math.abs(angErr) < 0.3) {
+        this.kinX = this.torso.position.x;
+        this.walkTargetX = this.kinX;
+        this.state = "walking";
+      }
+    } else if (this.state === "falling" || this.state === "flying") {
+      if (this.state === "falling") {
+        Body.applyForce(this.torso, this.torso.position, { x: 0, y: (settings.fallRate - 1) * 0.0012 * this.torso.mass * intensity });
+      }
+      this.checkLanding();
+    }
+  };
+
+  // Walking/idle figures are fully kinematic: every part's position/angle is
+  // computed directly from `phase` and set outright (Body.setPosition/
+  // setAngle, velocity zeroed) rather than chased with a force. This is what
+  // actually stops the sliding/floating a spring-based walk could never
+  // fully avoid -- there's no physics to fight anymore for these states.
+  // Real ragdoll physics takes back over the instant a figure goes airborne.
+  Figure.prototype.poseKinematic = function (moving, speedMul) {
+    var d = this.dims;
+    var standY = platformY(this.homePlatform) - settings.thickness / 2 - d.legLen - d.torsoH / 2;
+
+    Body.setPosition(this.torso, { x: this.kinX, y: standY });
+    Body.setAngle(this.torso, 0);
+    Body.setVelocity(this.torso, { x: 0, y: 0 });
+    Body.setAngularVelocity(this.torso, 0);
+
+    var legAmp = moving ? 0.55 * Math.min(speedMul, 1.6) : 0.08;
+    var kneeAmp = moving ? 0.9 : 0.1;
+    var armAmp = moving ? 0.4 * Math.min(speedMul, 1.6) : 0.06;
+    var elbowAmp = moving ? 0.3 : 0.06;
+
+    var swingL = Math.sin(this.phase), swingR = Math.sin(this.phase + Math.PI);
+
+    this.placeLegKinematic(this.thighL, this.shinL, this.kinX - d.torsoW / 4, standY + d.torsoH / 2,
+      swingL * legAmp, Math.max(0, swingL) * kneeAmp, d.thighLen, d.shinLen);
+    this.placeLegKinematic(this.thighR, this.shinR, this.kinX + d.torsoW / 4, standY + d.torsoH / 2,
+      swingR * legAmp, Math.max(0, swingR) * kneeAmp, d.thighLen, d.shinLen);
+
+    this.placeArmKinematic(this.upperArmL, this.foreArmL, this.kinX - d.torsoW / 2, standY - d.torsoH / 2 + 8 * this.size,
+      -swingL * armAmp, Math.max(0, -swingL) * elbowAmp, d.upperArmLen, d.foreArmLen, -1);
+    this.placeArmKinematic(this.upperArmR, this.foreArmR, this.kinX + d.torsoW / 2, standY - d.torsoH / 2 + 8 * this.size,
+      -swingR * armAmp, Math.max(0, -swingR) * elbowAmp, d.upperArmLen, d.foreArmLen, 1);
+
+    var bob = moving ? 0 : Math.sin(this.phase * 0.6) * 1.2 * this.size;
+    Body.setPosition(this.head, { x: this.kinX, y: standY - d.torsoH / 2 - d.headR + bob });
+    Body.setAngle(this.head, 0);
+    Body.setVelocity(this.head, { x: 0, y: 0 });
+    Body.setAngularVelocity(this.head, 0);
+  };
+
+  // Forward-kinematics leg placement: thigh swings from the hip, shin bends
+  // from the knee. thighAngle 0 = straight down (matches how these bodies
+  // were built -- local +y is "down" at angle 0).
+  Figure.prototype.placeLegKinematic = function (thigh, shin, hipX, hipY, thighAngle, kneeBend, thighLen, shinLen) {
+    var thighHalf = thighLen / 2, shinHalf = shinLen / 2;
+    Body.setPosition(thigh, { x: hipX - thighHalf * Math.sin(thighAngle), y: hipY + thighHalf * Math.cos(thighAngle) });
+    Body.setAngle(thigh, thighAngle);
+    Body.setVelocity(thigh, { x: 0, y: 0 });
+    Body.setAngularVelocity(thigh, 0);
+
+    var kneeX = hipX - thighLen * Math.sin(thighAngle);
+    var kneeY = hipY + thighLen * Math.cos(thighAngle);
+    var shinAngle = thighAngle + kneeBend;
+    Body.setPosition(shin, { x: kneeX - shinHalf * Math.sin(shinAngle), y: kneeY + shinHalf * Math.cos(shinAngle) });
+    Body.setAngle(shin, shinAngle);
+    Body.setVelocity(shin, { x: 0, y: 0 });
+    Body.setAngularVelocity(shin, 0);
+  };
+
+  // Forward-kinematics arm placement. Arms are built horizontal (local +x is
+  // the long axis), so a baseline angle of sign*PI/2 is what makes them hang
+  // straight down at rest, with the swing amplitude applied around that.
+  Figure.prototype.placeArmKinematic = function (upper, fore, shoulderX, shoulderY, swing, elbowBend, upperLen, foreLen, sign) {
+    var upperAngle = sign * (Math.PI / 2) + swing;
+    var upperHalf = upperLen / 2, foreHalf = foreLen / 2;
+    Body.setPosition(upper, { x: shoulderX + sign * upperHalf * Math.cos(upperAngle), y: shoulderY + sign * upperHalf * Math.sin(upperAngle) });
+    Body.setAngle(upper, upperAngle);
+    Body.setVelocity(upper, { x: 0, y: 0 });
+    Body.setAngularVelocity(upper, 0);
+
+    var elbowX = shoulderX + sign * upperLen * Math.cos(upperAngle);
+    var elbowY = shoulderY + sign * upperLen * Math.sin(upperAngle);
+    var foreAngle = upperAngle + sign * elbowBend;
+    Body.setPosition(fore, { x: elbowX + sign * foreHalf * Math.cos(foreAngle), y: elbowY + sign * foreHalf * Math.sin(foreAngle) });
+    Body.setAngle(fore, foreAngle);
+    Body.setVelocity(fore, { x: 0, y: 0 });
+    Body.setAngularVelocity(fore, 0);
+  };
+
+  Figure.prototype.checkLanding = function () {
+    var groundOffset = settings.thickness / 2 + this.dims.legLen + this.dims.torsoH / 2;
+    var targetTopY = platformY("top") - groundOffset;
+    var targetBotY = platformY("bottom") - groundOffset;
+    var nearTop = Math.abs(this.torso.position.y - targetTopY) < 45 * this.size;
+    var nearBot = Math.abs(this.torso.position.y - targetBotY) < 45 * this.size;
+    var slow = Math.abs(this.torso.velocity.y) < 12;
+    var lost = this.torso.position.y > targetBotY + 300 || this.torso.position.y < targetTopY - 300;
+    var landedWhich = nearTop ? "top" : (nearBot ? "bottom" : null);
+    if (((nearTop || nearBot) && slow) || lost) {
+      this.groundedFrames++;
+      if (this.groundedFrames > 6 || lost) {
+        if (!landedWhich) landedWhich = this.state === "falling" ? "bottom" : "top";
+        if (lost || !((nearTop || nearBot) && slow)) {
+          var targetY = landedWhich === "top" ? targetTopY : targetBotY;
+          var dy = targetY - this.torso.position.y;
+          this.parts.forEach(function (p) {
+            Body.setPosition(p, { x: p.position.x, y: p.position.y + dy });
+            Body.setVelocity(p, { x: 0, y: 0 });
+            Body.setAngularVelocity(p, 0);
+          });
+        }
+        this.homePlatform = landedWhich;
+        this.setAirborne(false);
+        this.state = "gettingUp";
+        this.getupTimer = rand(0.5, 1.0);
+        this.walkTargetX = this.torso.position.x;
+        this.groundedFrames = 0;
+      }
+    } else {
+      this.groundedFrames = 0;
+    }
+  };
+
+  Figure.prototype.sendFalling = function () {
+    if (this.state === "falling" || this.state === "flying") return;
+    this.state = "falling";
+    this.setAirborne(true);
+    Body.setVelocity(this.torso, { x: this.torso.velocity.x + rand(-1, 1), y: 0.5 });
+  };
+
+  Figure.prototype.sendCatapult = function () {
+    if (this.state === "falling" || this.state === "flying") return;
+    this.state = "flying";
+    this.setAirborne(true);
+    var power = 22 * settings.catapultRate * Math.sqrt(settings.intensity);
+    this.parts.forEach(function (p) {
+      Body.setVelocity(p, { x: p.velocity.x + rand(-1.5, 1.5), y: -power + rand(-1, 1) });
+    });
+  };
+
+  Figure.prototype.punch = function (fromX, fromY) {
+    var dx = this.torso.position.x - fromX, dy = this.torso.position.y - fromY;
+    var len = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+    var mag = 10 * settings.punchScale * settings.intensity;
+    var fx = (dx / len) * mag, fy = (dy / len) * mag - 2;
+    this.parts.forEach(function (p) { Body.setVelocity(p, { x: p.velocity.x + fx * (0.6 + Math.random() * 0.8), y: p.velocity.y + fy * (0.6 + Math.random() * 0.8) }); });
+  };
+
+  Figure.prototype.draw = function (ctx) {
+    var d = this.dims;
+    function limb(a, b, thick) {
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.lineCap = "round"; ctx.lineWidth = thick; ctx.strokeStyle = "#000000";
+      ctx.stroke();
+    }
+
+    var thighLTop = localEndPoint(this.thighL, 0, -d.thighLen / 2), thighLBot = localEndPoint(this.thighL, 0, d.thighLen / 2);
+    var shinLTop = localEndPoint(this.shinL, 0, -d.shinLen / 2), shinLBot = localEndPoint(this.shinL, 0, d.shinLen / 2);
+    var thighRTop = localEndPoint(this.thighR, 0, -d.thighLen / 2), thighRBot = localEndPoint(this.thighR, 0, d.thighLen / 2);
+    var shinRTop = localEndPoint(this.shinR, 0, -d.shinLen / 2), shinRBot = localEndPoint(this.shinR, 0, d.shinLen / 2);
+
+    var upperArmLIn = localEndPoint(this.upperArmL, d.upperArmLen / 2, 0), upperArmLOut = localEndPoint(this.upperArmL, -d.upperArmLen / 2, 0);
+    var foreArmLIn = localEndPoint(this.foreArmL, d.foreArmLen / 2, 0), foreArmLOut = localEndPoint(this.foreArmL, -d.foreArmLen / 2, 0);
+    var upperArmRIn = localEndPoint(this.upperArmR, -d.upperArmLen / 2, 0), upperArmROut = localEndPoint(this.upperArmR, d.upperArmLen / 2, 0);
+    var foreArmRIn = localEndPoint(this.foreArmR, -d.foreArmLen / 2, 0), foreArmROut = localEndPoint(this.foreArmR, d.foreArmLen / 2, 0);
+
+    limb(thighLTop, thighLBot, d.thighT);
+    limb(shinLTop, shinLBot, d.shinT);
+    limb(thighRTop, thighRBot, d.thighT);
+    limb(shinRTop, shinRBot, d.shinT);
+    limb(upperArmLIn, upperArmLOut, d.upperArmT);
+    limb(foreArmLIn, foreArmLOut, d.foreArmT);
+
+    var tc = this.torso.position, ta = this.torso.angle;
+    ctx.save();
+    ctx.translate(tc.x, tc.y); ctx.rotate(ta);
+    var r = Math.min(d.torsoW, 10) / 2 + 2;
+    ctx.beginPath();
+    ctx.moveTo(-d.torsoW / 2, -d.torsoH / 2 + r);
+    ctx.arcTo(-d.torsoW / 2, -d.torsoH / 2, 0, -d.torsoH / 2, r);
+    ctx.arcTo(d.torsoW / 2, -d.torsoH / 2, d.torsoW / 2, -d.torsoH / 2 + r, r);
+    ctx.lineTo(d.torsoW / 2, d.torsoH / 2 - r);
+    ctx.arcTo(d.torsoW / 2, d.torsoH / 2, 0, d.torsoH / 2, r);
+    ctx.arcTo(-d.torsoW / 2, d.torsoH / 2, -d.torsoW / 2, d.torsoH / 2 - r, r);
+    ctx.closePath();
+    ctx.fillStyle = "#000000"; ctx.fill();
+    ctx.restore();
+
+    limb(upperArmRIn, upperArmROut, d.upperArmT);
+    limb(foreArmRIn, foreArmROut, d.foreArmT);
+
+    var hc = this.head.position;
+    ctx.beginPath();
+    ctx.arc(hc.x, hc.y, d.headR, 0, Math.PI * 2);
+    ctx.fillStyle = "#000000"; ctx.fill();
+    ctx.save();
+    ctx.translate(hc.x, hc.y); ctx.rotate(this.head.angle);
+    ctx.fillStyle = "#ffffff";
+    var eo = d.headR * 0.35;
+    ctx.beginPath(); ctx.arc(-eo, -d.headR * 0.1, d.headR * 0.11, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(eo, -d.headR * 0.1, d.headR * 0.11, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  };
+
+  Figure.prototype.drawShadow = function (ctx) {
+    var d = this.dims;
+    var footX = (this.shinL.position.x + this.shinR.position.x) / 2;
+    var footY = Math.max(localEndPoint(this.shinL, 0, d.shinLen / 2).y, localEndPoint(this.shinR, 0, d.shinLen / 2).y);
+    var rx = d.torsoW * 1.8 + settings.shadowSize;
+    var ry = rx * 0.32;
+    var blur = Math.max(0, 30 - settings.shadowSharpness);
+    ctx.save();
+    ctx.filter = blur > 0 ? "blur(" + blur + "px)" : "none";
+    ctx.fillStyle = "rgba(0,0,0,0.3)";
+    ctx.beginPath();
+    ctx.ellipse(footX, footY + settings.shadowDistance, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  };
+
+  // ---------- spawning ----------
+  var spawnAcc = 0;
+  function spawnFigure() {
+    if (figures.length >= MAX_FIGURES) return;
+    var which = Math.random() < 0.5 ? "top" : "bottom";
+    var fromLeft = Math.random() < 0.5;
+    var y = platformY(which) - settings.thickness / 2;
+    var x = fromLeft ? -40 : W() + 40;
+    var fig = new Figure(x, y, which);
+    fig.state = "walking";
+    fig.hasArrived = false;
+    fig.walkTargetX = fromLeft ? rand(80, W() * 0.4) : rand(W() * 0.6, W() - 80);
+    figures.push(fig);
+  }
+  function someoneStillEntering() {
+    return figures.some(function (f) { return !f.hasArrived; });
+  }
+
+  // ---------- click handling ----------
+  function figureAt(x, y) {
+    var allBodies = [];
+    figures.forEach(function (f) { allBodies = allBodies.concat(f.parts); });
+    var hits = Query.point(allBodies, { x: x, y: y });
+    if (hits.length) return hits[0].figureRef;
+    return null;
+  }
+
+  function triggerFlee(clicked) {
+    figures.forEach(function (f) {
+      if (f === clicked) return;
+      if (f.state !== "walking" && f.state !== "idle") return;
+      var dd = dist(f.torso.position.x, f.torso.position.y, clicked.torso.position.x, clicked.torso.position.y);
+      var reactAt = jitter(settings.reactionDistance);
+      if (dd < reactAt) {
+        var runAt = jitter(settings.runDistance);
+        var dirSign = f.torso.position.x >= clicked.torso.position.x ? 1 : -1;
+        if (f.torso.position.x === clicked.torso.position.x) dirSign = Math.random() < 0.5 ? 1 : -1;
+        var margin = 50;
+        f.walkTargetX = clamp(f.torso.position.x + dirSign * runAt, margin, W() - margin);
+        f.state = "fleeing";
+      }
+    });
+  }
+
+  canvas.addEventListener("click", function (e) {
+    var f = figureAt(e.clientX, e.clientY);
+    if (!f) return;
+    if (f.state === "walking" || f.state === "idle") {
+      if (f.homePlatform === "top") f.sendFalling(); else f.sendCatapult();
+      triggerFlee(f);
+    } else if (f.state === "falling" || f.state === "flying") {
+      f.punch(e.clientX, e.clientY);
+    }
+  });
+
+  // ---------- slider wiring ----------
+  function bindSlider(id, key, decimals, suffix) {
+    var el = document.getElementById(id);
+    var label = document.getElementById("v_" + id);
+    el.value = settings[key];
+    label.textContent = Number(settings[key]).toFixed(decimals) + (suffix || "");
+    el.addEventListener("input", function () {
+      settings[key] = parseFloat(el.value);
+      label.textContent = Number(settings[key]).toFixed(decimals) + (suffix || "");
+      if (id === "topY" || id === "bottomY" || id === "thickness") rebuildPlatforms();
+      if (id === "intensity") engine.world.gravity.y = 1.0 * settings.intensity;
+    });
+  }
+  bindSlider("topY", "topY", 0, "px");
+  bindSlider("bottomY", "bottomY", 0, "px");
+  bindSlider("thickness", "thickness", 0, "px");
+  bindSlider("size", "size", 2, "x");
+  bindSlider("spawnRate", "spawnRate", 1, "s");
+  bindSlider("fallRate", "fallRate", 2, "x");
+  bindSlider("catapultRate", "catapultRate", 2, "x");
+  bindSlider("punchScale", "punchScale", 2, "x");
+  bindSlider("intensity", "intensity", 2, "x");
+  bindSlider("shadowSize", "shadowSize", 0, "px");
+  bindSlider("shadowDistance", "shadowDistance", 0, "px");
+  bindSlider("shadowSharpness", "shadowSharpness", 0, "");
+  bindSlider("reactionDistance", "reactionDistance", 0, "px");
+  bindSlider("runDistance", "runDistance", 0, "px");
+  bindSlider("randomization", "randomization", 2, "");
+
+  document.getElementById("panelToggle").addEventListener("click", function () {
+    var panel = document.getElementById("devPanel");
+    panel.classList.toggle("hidden");
+    this.textContent = panel.classList.contains("hidden") ? "Show dev panel" : "Hide dev panel";
+  });
+
+  // ---------- loop ----------
+  function stepBehavior(dt) {
+    spawnAcc += dt;
+    if (spawnAcc >= settings.spawnRate && !someoneStillEntering()) { spawnAcc = 0; spawnFigure(); }
+    figures.forEach(function (f) { f.applyBehavior(dt); });
+  }
+
+  // Hard velocity ceiling applied after physics integration, every frame --
+  // catches spikes from limb-control forces/joint reactions within the same
+  // tick, not just carryover from the previous one.
+  function clampVelocities() {
+    figures.forEach(function (f) {
+      var airborne = f.state === "falling" || f.state === "flying";
+      var maxV = airborne ? 45 : 12;
+      f.parts.forEach(function (p) {
+        var vx = clamp(p.velocity.x, -maxV, maxV);
+        var vy = clamp(p.velocity.y, -maxV, maxV);
+        if (vx !== p.velocity.x || vy !== p.velocity.y) Body.setVelocity(p, { x: vx, y: vy });
+      });
+    });
+  }
+
+  var lastTime = performance.now();
+  function tick(now) {
+    var dtMs = Math.min(100, now - lastTime);
+    lastTime = now;
+    stepBehavior(dtMs / 1000);
+    Engine.update(engine, dtMs);
+    clampVelocities();
+
+    ctx.clearRect(0, 0, W(), H());
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W(), H());
+
+    drawPlatformShadow(platformTop);
+    drawPlatformShadow(platformBottom);
+    figures.forEach(function (f) { f.drawShadow(ctx); });
+
+    drawPlatform(platformTop);
+    drawPlatform(platformBottom);
+    figures.forEach(function (f) { f.draw(ctx); });
+
+    requestAnimationFrame(tick);
+  }
+
+  function drawPlatform(body) {
+    if (!body) return;
+    var y = body.position.y, t = settings.thickness;
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, y - t / 2, W(), t);
+  }
+
+  function drawPlatformShadow(body) {
+    if (!body) return;
+    var y = body.position.y + settings.shadowDistance;
+    var h = settings.thickness + settings.shadowSize * 2;
+    var blur = Math.max(0, 30 - settings.shadowSharpness);
+    ctx.save();
+    ctx.filter = blur > 0 ? "blur(" + blur + "px)" : "none";
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(0, y - h / 2, W(), h);
+    ctx.restore();
+  }
+
+  window.addEventListener("resize", resize);
+  (function initialResize() {
+    if (window.innerWidth > 0 && window.innerHeight > 0) { resize(); }
+    else { requestAnimationFrame(initialResize); }
+  })();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
