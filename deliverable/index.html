@@ -87,10 +87,12 @@
     <input type="range" id="fallRate" min="0.3" max="3" step="0.05"></div>
   <div class="ctrl"><label>Rate of catapult <span class="val" id="v_catapultRate"></span></label>
     <input type="range" id="catapultRate" min="0.4" max="3" step="0.05"></div>
-  <div class="ctrl"><label>Mid-air click effect <span class="val" id="v_punchScale"></span></label>
-    <input type="range" id="punchScale" min="0" max="3" step="0.05"></div>
   <div class="ctrl"><label>Physics engine intensity <span class="val" id="v_intensity"></span></label>
     <input type="range" id="intensity" min="0.3" max="2.5" step="0.05"></div>
+  <div class="ctrl"><label>Blast radius <span class="val" id="v_blastRadius"></span></label>
+    <input type="range" id="blastRadius" min="0" max="500" step="5"></div>
+  <div class="ctrl"><label>Blast intensity <span class="val" id="v_blastIntensity"></span></label>
+    <input type="range" id="blastIntensity" min="0" max="40" step="0.5"></div>
 
   <hr class="group-sep">
   <h2>Shadows</h2>
@@ -98,6 +100,8 @@
     <input type="range" id="shadowSize" min="0" max="160" step="1"></div>
   <div class="ctrl"><label>Shadow distance <span class="val" id="v_shadowDistance"></span></label>
     <input type="range" id="shadowDistance" min="0" max="200" step="1"></div>
+  <div class="ctrl"><label>Shadow horizontal displacement <span class="val" id="v_shadowOffsetX"></span></label>
+    <input type="range" id="shadowOffsetX" min="-150" max="150" step="1"></div>
   <div class="ctrl"><label>Shadow sharpness <span class="val" id="v_shadowSharpness"></span></label>
     <input type="range" id="shadowSharpness" min="0" max="30" step="1"></div>
 
@@ -123,9 +127,10 @@
   var settings = {
     topY: 140, bottomY: 140, thickness: 12,
     size: 0.55, spawnRate: 2.0,
-    fallRate: 1.0, catapultRate: 1.0, punchScale: 1.0, intensity: 1.0,
+    fallRate: 1.0, catapultRate: 1.0, intensity: 1.0,
+    blastRadius: 150, blastIntensity: 14,
     reactionDistance: 150, runDistance: 220, randomization: 0.3,
-    shadowSize: 20, shadowDistance: 10, shadowSharpness: 15
+    shadowSize: 20, shadowDistance: 10, shadowSharpness: 15, shadowOffsetX: 0
   };
 
   var canvas = document.getElementById("scene");
@@ -366,17 +371,21 @@
       }
       // One-way top platform: solid from above, passable from below (that's
       // what "never collides with its underside" means). A figure clearly
-      // above it and no longer rising can catch on it -- covers a catapult
-      // that overshot well past the platform, not just one that arrives
-      // gently (a gentle arrival is already handled by checkLanding's
-      // proximity check below). The margin has to clear a standing figure's
-      // own height above platformY (~30-50px depending on size), or a
-      // figure that just started falling *from* the top platform (which
-      // begins right at that height, moving down) immediately re-catches
-      // on the very platform it's supposed to fall through -- 150px is
-      // comfortably past that, while still well short of a normal
-      // catapult's apex (measured ~3px past platformY, not hundreds).
-      if (this.torso.position.y < platformY("top") - 150 && this.torso.velocity.y >= 0) {
+      // above it and no longer rising can catch on it. A fixed pixel margin
+      // here left a dead zone: a catapult whose apex only clears the
+      // platform by a modest amount (more than checkLanding's proximity
+      // tolerance, less than the old 150px margin) satisfied neither
+      // mechanism and sailed straight through. hasLeftDeparture already
+      // tracks "has this figure actually moved away from where it took
+      // off," updated in checkLanding below -- reusing it here removes the
+      // magic number entirely: a catapult clears 60px of upward travel
+      // (departing from the bottom platform) long before it's anywhere
+      // near the top platform, so by the time it's above top and falling
+      // back down, the gate is already open at whatever height that
+      // actually is. A figure falling *from* the top platform never
+      // triggers this: it only clears 60px of travel once it's already
+      // well *below* topY, at which point the height check below is false.
+      if (this.hasLeftDeparture && this.torso.position.y < platformY("top") && this.torso.velocity.y >= 0) {
         this.parts.forEach(function (p) { p.collisionFilter.mask |= CAT_PLATFORM_TOP; });
       }
       this.checkLanding();
@@ -529,20 +538,49 @@
     });
   };
 
-  Figure.prototype.punch = function (fromX, fromY) {
-    var dx = this.torso.position.x - fromX, dy = this.torso.position.y - fromY;
-    var len = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-    var mag = 10 * settings.punchScale * settings.intensity;
-    var fx = (dx / len) * mag, fy = (dy / len) * mag - 2;
-    this.parts.forEach(function (p) { Body.setVelocity(p, { x: p.velocity.x + fx * (0.6 + Math.random() * 0.8), y: p.velocity.y + fy * (0.6 + Math.random() * 0.8) }); });
-  };
+  // General blast/AOE effect, replacing the old single-target mid-air punch.
+  // Every figure within blastRadius of a point gets a radially-outward
+  // impulse, stronger the closer it is (linear falloff to zero at the
+  // edge). A walking/idle/fleeing figure caught in the blast is knocked
+  // into ragdoll (same transition sendFalling/sendCatapult use) rather than
+  // only affecting figures already airborne -- a real blast knocks over
+  // standers too.
+  function applyBlast(cx, cy) {
+    figures.forEach(function (f) {
+      var dx = f.torso.position.x - cx, dy = f.torso.position.y - cy;
+      var d = Math.sqrt(dx * dx + dy * dy);
+      if (d > settings.blastRadius) return;
+      var falloff = 1 - d / settings.blastRadius;
+      var mag = settings.blastIntensity * settings.intensity * falloff;
+      if (mag <= 0) return;
+      var dirX, dirY;
+      if (d > 0.001) { dirX = dx / d; dirY = dy / d; }
+      else { var a = rand(0, Math.PI * 2); dirX = Math.cos(a); dirY = -Math.abs(Math.sin(a)); }
 
-  Figure.prototype.draw = function (ctx) {
+      if (f.state === "walking" || f.state === "idle" || f.state === "fleeing") {
+        f.state = "falling";
+        f.setAirborne(true);
+        f.hasLeftDeparture = false;
+        f.departureY = platformY(f.homePlatform);
+      }
+      if (f.state === "falling" || f.state === "flying" || f.state === "gettingUp") {
+        f.parts.forEach(function (p) {
+          var jf = 0.6 + Math.random() * 0.8;
+          Body.setVelocity(p, { x: p.velocity.x + dirX * mag * jf, y: p.velocity.y + dirY * mag * jf });
+        });
+      }
+    });
+  }
+
+  // Shared limb/torso/head geometry, used by both the real figure (opaque
+  // black) and its shadow (translucent copy, offset/scaled) -- keeps the
+  // two renderings from drifting out of sync as the pose changes.
+  Figure.prototype.renderShape = function (ctx, color) {
     var d = this.dims;
     function limb(a, b, thick) {
       ctx.beginPath();
       ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-      ctx.lineCap = "round"; ctx.lineWidth = thick; ctx.strokeStyle = "#000000";
+      ctx.lineCap = "round"; ctx.lineWidth = thick; ctx.strokeStyle = color;
       ctx.stroke();
     }
 
@@ -575,7 +613,7 @@
     ctx.arcTo(d.torsoW / 2, d.torsoH / 2, 0, d.torsoH / 2, r);
     ctx.arcTo(-d.torsoW / 2, d.torsoH / 2, -d.torsoW / 2, d.torsoH / 2 - r, r);
     ctx.closePath();
-    ctx.fillStyle = "#000000"; ctx.fill();
+    ctx.fillStyle = color; ctx.fill();
     ctx.restore();
 
     limb(upperArmRIn, upperArmROut, d.upperArmT);
@@ -584,7 +622,12 @@
     var hc = this.head.position;
     ctx.beginPath();
     ctx.arc(hc.x, hc.y, d.headR, 0, Math.PI * 2);
-    ctx.fillStyle = "#000000"; ctx.fill();
+    ctx.fillStyle = color; ctx.fill();
+  };
+
+  Figure.prototype.draw = function (ctx) {
+    this.renderShape(ctx, "#000000");
+    var d = this.dims, hc = this.head.position;
     ctx.save();
     ctx.translate(hc.x, hc.y); ctx.rotate(this.head.angle);
     ctx.fillStyle = "#ffffff";
@@ -594,19 +637,23 @@
     ctx.restore();
   };
 
+  // Shadow is a scaled copy of the figure's own silhouette (not a generic
+  // ellipse), anchored at the feet so it still visually "sits" on the
+  // ground as it scales, then nudged by (shadowOffsetX, shadowDistance) to
+  // simulate an angled light source.
   Figure.prototype.drawShadow = function (ctx) {
     var d = this.dims;
     var footX = (this.shinL.position.x + this.shinR.position.x) / 2;
     var footY = Math.max(localEndPoint(this.shinL, 0, d.shinLen / 2).y, localEndPoint(this.shinR, 0, d.shinLen / 2).y);
-    var rx = d.torsoW * 1.8 + settings.shadowSize;
-    var ry = rx * 0.32;
+    var scale = 1 + settings.shadowSize / 60;
     var blur = Math.max(0, 30 - settings.shadowSharpness);
     ctx.save();
     ctx.filter = blur > 0 ? "blur(" + blur + "px)" : "none";
-    ctx.fillStyle = "rgba(0,0,0,0.3)";
-    ctx.beginPath();
-    ctx.ellipse(footX, footY + settings.shadowDistance, rx, ry, 0, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.translate(settings.shadowOffsetX, settings.shadowDistance);
+    ctx.translate(footX, footY);
+    ctx.scale(scale, scale);
+    ctx.translate(-footX, -footY);
+    this.renderShape(ctx, "rgba(0,0,0,0.3)");
     ctx.restore();
   };
 
@@ -669,13 +716,11 @@
 
   canvas.addEventListener("click", function (e) {
     var f = figureAt(e.clientX, e.clientY);
-    if (!f) return;
-    if (f.state === "walking" || f.state === "idle") {
+    if (f && (f.state === "walking" || f.state === "idle")) {
       if (f.homePlatform === "top") f.sendFalling(); else f.sendCatapult();
       triggerFlee(f);
-    } else if (f.state === "falling" || f.state === "flying") {
-      f.punch(e.clientX, e.clientY);
     }
+    applyBlast(e.clientX, e.clientY);
   });
 
   // ---------- slider wiring ----------
@@ -698,10 +743,12 @@
   bindSlider("spawnRate", "spawnRate", 1, "s");
   bindSlider("fallRate", "fallRate", 2, "x");
   bindSlider("catapultRate", "catapultRate", 2, "x");
-  bindSlider("punchScale", "punchScale", 2, "x");
   bindSlider("intensity", "intensity", 2, "x");
+  bindSlider("blastRadius", "blastRadius", 0, "px");
+  bindSlider("blastIntensity", "blastIntensity", 1, "x");
   bindSlider("shadowSize", "shadowSize", 0, "px");
   bindSlider("shadowDistance", "shadowDistance", 0, "px");
+  bindSlider("shadowOffsetX", "shadowOffsetX", 0, "px");
   bindSlider("shadowSharpness", "shadowSharpness", 0, "");
   bindSlider("reactionDistance", "reactionDistance", 0, "px");
   bindSlider("runDistance", "runDistance", 0, "px");
@@ -806,7 +853,10 @@
     ctx.save();
     ctx.filter = blur > 0 ? "blur(" + blur + "px)" : "none";
     ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.fillRect(0, y - h / 2, W(), h);
+    // Drawn wider than the viewport (matching the physics platform's own
+    // +400 margin) so shifting it by shadowOffsetX never reveals a gap at
+    // either screen edge.
+    ctx.fillRect(-200 + settings.shadowOffsetX, y - h / 2, W() + 400, h);
     ctx.restore();
   }
 
